@@ -1297,6 +1297,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch (e) { /* corrupted state, ignore */ }
 });
 
+// The hidden profile/target fields are only filled when a suggestion is clicked, so a
+// typed model name leaves them empty and GitHub rejects the dispatch with
+// "Required input 'model' not provided" (HTTP 422). Resolve the text before dispatching.
+function resolveTypedModel(text) {
+    const needle = (text || "").trim().toLowerCase();
+    if (!needle) return null;
+    const options = Array.from(document.getElementById("modelOptions").options);
+    const pick = opt => ({ value: opt.value, profile: opt.dataset.profile || "", target: opt.dataset.target || "" });
+
+    const exact = options.find(o => o.value.toLowerCase() === needle)
+        || options.find(o => (o.dataset.profile || "").toLowerCase() === needle);
+    if (exact) return pick(exact);
+
+    const partial = options.filter(o =>
+        o.value.toLowerCase().includes(needle) || (o.dataset.profile || "").toLowerCase().includes(needle));
+    if (partial.length === 1) return pick(partial[0]);
+
+    return null;
+}
+
 async function runWorkflow(event) {
     event.preventDefault();
     const token = getToken();
@@ -1305,18 +1325,42 @@ async function runWorkflow(event) {
         return setTokenStatus("error", "Save a GitHub token to run builds.");
     }
 
+    const modelEl = document.getElementById("modelInput");
+    let profile = document.getElementById("profileInput").value;
+    let target = document.getElementById("targetInput").value;
+
+    if (!profile || !target) {
+        const resolved = resolveTypedModel(modelEl.value);
+        if (resolved) {
+            profile = resolved.profile;
+            target = resolved.target;
+            modelEl.value = resolved.value;
+            document.getElementById("profileInput").value = profile;
+            document.getElementById("targetInput").value = target;
+        }
+    }
+
+    if (!profile || !target) {
+        const typed = modelEl.value.trim();
+        modelEl.focus();
+        alert(typed
+            ? `"${typed}" is not a device in the list. Pick one of the suggestions so its profile and target get set, then build again.`
+            : "Select a device model first — the build needs its profile and target.");
+        return;
+    }
+
     const { owner, repo, branch } = await fetchRepo();
     const shareURL = await buildShareURL();
 
     const inputs = {
-        model: document.getElementById("profileInput").value,
+        model: profile,
         version: document.getElementById("versionInput").value,
         packages: document.getElementById("packagesInput").value.trim(),
         device_packages: (window.devicePkgs || "").trim(),
         disabled_services: document.getElementById("disabled_servicesInput").value,
         scripts: document.getElementById("scriptsInput").value,
         customScripts: document.getElementById("customScriptInput").value,
-        target: document.getElementById("targetInput").value,
+        target: target,
         share_url: shareURL
     };
 
