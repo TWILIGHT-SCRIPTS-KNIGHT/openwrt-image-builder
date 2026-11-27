@@ -66,12 +66,19 @@
                 <span id="tokenWarnText"></span>
             </div>
 
+            <div id="repoSection" class="flex flex-col gap-2">
+                <label for="targetRepoInput" class="font-label text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Build repository</label>
+                <input type="text" id="targetRepoInput" placeholder="your-name/OpenWrt-Builder" autocomplete="off" spellcheck="false" class="w-full bg-surface-container-highest border border-outline-variant/20 rounded-lg h-9 px-3 text-sm text-on-surface focus:ring-2 focus:ring-primary/50 transition-shadow">
+                <p id="repoStatus" class="text-[11px] min-h-[1rem] text-on-surface-variant"></p>
+                <p class="text-[11px] text-on-surface-variant">This must be a repo on <b>your</b> account that contains <code class="text-primary">.github/workflows/build.yml</code> — fork the upstream repo if you haven't. Press Enter or click away to save.</p>
+            </div>
+
             <div id="tokenCreateSection" class="flex flex-col gap-2">
                 <p class="font-label text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">1 · Create a token</p>
                 <button type="button" onclick="window.open('https://github.com/settings/tokens/new?scopes=repo&amp;description=OpenWrt-Builder%20Image%20Builder', '_blank')" class="m3-btn w-max h-9 px-4 bg-surface-container-highest text-on-surface rounded-full font-semibold text-sm flex items-center gap-2 border border-outline-variant/20">
                     <span class="material-symbols-outlined text-[18px]">add_task</span> Create classic token
                 </button>
-                <p class="text-[11px] text-on-surface-variant">Only the <code class="text-primary">repo</code> scope is needed to dispatch builds and read releases. Fine-grained tokens work too: restrict access to this repository and grant <b>Actions: Read &amp; write</b>.</p>
+                <p class="text-[11px] text-on-surface-variant">Only the <code class="text-primary">repo</code> scope is needed to dispatch builds and read releases. Fine-grained tokens work too: restrict access to the build repository and grant <b>Actions: Read &amp; write</b>.</p>
             </div>
 
             <div id="tokenPasteSection" class="flex flex-col gap-2">

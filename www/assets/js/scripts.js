@@ -2,15 +2,48 @@
 // 1. DATA / API LAYER (Fetching & Formatting)
 // ============================================
 
-async function fetchRepo() {
-    const siteUrl = window.location.href;
-    if (siteUrl.includes('127.0.0.1')) return { owner: 'AzimsTech', repo: 'OpenWrt-Builder', branch: 'main' };
+// Repo the UI reads scripts/releases from and dispatches builds to.
+// Resolution order: ?repo=owner/name -> GitHub Pages URL -> repo saved in the token modal -> upstream default.
+const TARGET_REPO_KEY = "openwrt_target_repo";
+const DEFAULT_REPO = { owner: 'AzimsTech', repo: 'OpenWrt-Builder' };
 
-    const urlParts = siteUrl.split('/');
-    const owner = urlParts[2].split('.')[0];
-    const repo = urlParts[3] || '';
+function parseRepoSlug(value) {
+    const raw = (value || "").trim();
+    if (!raw) return null;
+    const m = raw.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/i)
+        || raw.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/);
+    return m ? { owner: m[1], repo: m[2] } : null;
+}
+
+function repoSlug(owner, repo) {
+    return `${owner}/${repo}`;
+}
+
+function getSavedTargetRepo() {
+    try { return parseRepoSlug(localStorage.getItem(TARGET_REPO_KEY)); } catch (e) { return null; }
+}
+
+async function fetchRepo() {
     const branch = 'main';
-    return { owner, repo, branch };
+
+    // 1. Explicit override: ?repo=owner/name
+    const fromQuery = parseRepoSlug(new URLSearchParams(window.location.search).get('repo'));
+    if (fromQuery) return { ...fromQuery, branch };
+
+    // 2. GitHub Pages: https://<owner>.github.io/<repo>/
+    const host = window.location.hostname;
+    if (host.endsWith('.github.io')) {
+        const owner = host.slice(0, -'.github.io'.length);
+        const repo = window.location.pathname.split('/').filter(Boolean)[0];
+        if (owner) return { owner, repo: repo || `${owner}.github.io`, branch };
+    }
+
+    // 3. Repo picked in the token modal (local previews have no repo in the URL)
+    const saved = getSavedTargetRepo();
+    if (saved) return { ...saved, branch };
+
+    // 4. Fallback: the upstream repo
+    return { ...DEFAULT_REPO, branch };
 }
 
 async function fetchOpenWrtVersions() {
@@ -1120,6 +1153,7 @@ function loadFromLocalStorage() {
 
 document.addEventListener("DOMContentLoaded", async () => {
     // 1. Setup UI and Github Link
+    initRepoField();
     updateTokenUI();
 
     // Enrich older saves (plain-string tokens) with login/avatar/scopes/expiry so the chip can show the username
@@ -1294,9 +1328,21 @@ async function runWorkflow(event) {
 
     if (!triggerRes.ok) {
         console.error("Dispatch failed", triggerRes.status, await triggerRes.text().catch(() => ""));
-        if (triggerRes.status === 401 || triggerRes.status === 403) {
+        if (triggerRes.status === 401) {
             setProgressFailed("Token rejected", "GitHub rejected your token. Save a valid token and retry.");
             openTokenError("GitHub rejected your token — save a valid one.");
+        } else if (triggerRes.status === 403) {
+            const msg = `Your token cannot start builds in ${repoSlug(owner, repo)} — it has read-only access. Fork the repo to your own account, then set that fork as the build repository.`;
+            setProgressFailed(`No write access to ${repoSlug(owner, repo)}`, msg);
+            openTokenError(msg);
+        } else if (triggerRes.status === 404) {
+            const msg = `${repoSlug(owner, repo)} was not found, or it has no .github/workflows/build.yml. Check the build repository and the token's repo access.`;
+            setProgressFailed("Repo or workflow missing", msg);
+            openTokenError(msg);
+        } else if (triggerRes.status === 422) {
+            const msg = `GitHub rejected the build inputs (HTTP 422) for ${repoSlug(owner, repo)}.`;
+            setProgressFailed("Invalid configuration", msg);
+            alert(msg);
         } else {
             alert(`Failed to trigger workflow (HTTP ${triggerRes.status}). Check console.`);
         }
@@ -1312,8 +1358,7 @@ async function runWorkflow(event) {
     try {
         runId = await findDispatchedRun(owner, repo, token, dispatchTime);
     } catch (e) {
-        setProgressFailed("Unauthorized", "GitHub rejected your token. Save a valid token and retry.");
-        openTokenError("GitHub rejected your token — save a valid one.");
+        setProgressFailed("Could not read the run", `The workflow was dispatched to ${repoSlug(owner, repo)}, but its status could not be read. Check the Actions tab on GitHub.`);
         return;
     }
     if (!runId) {
@@ -1681,6 +1726,8 @@ function updateTokenUI() {
                 ? "https://github.com/settings/personal-access-tokens"
                 : "https://github.com/settings/tokens";
             const bits = [];
+            const targetRepo = getSavedTargetRepo() || DEFAULT_REPO;
+            bits.push("Repo: " + repoSlug(targetRepo.owner, targetRepo.repo));
             if (info.scopes && info.scopes.length) bits.push("Scopes: " + info.scopes.join(", "));
             else bits.push("Repo Actions access verified");
             if (info.saved_at) bits.push("Saved " + new Date(info.saved_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }));
@@ -1713,11 +1760,53 @@ function updateTokenUI() {
     });
 }
 
+function setRepoStatus(kind, msg) {
+    const el = document.getElementById("repoStatus");
+    if (!el) return;
+    el.textContent = msg || "";
+    const tone = kind === "error" ? "text-error" : kind === "ok" ? "text-tertiary" : "text-on-surface-variant";
+    el.className = `text-[11px] min-h-[1rem] ${tone}`;
+}
+
+function updateRepoField() {
+    const input = document.getElementById("targetRepoInput");
+    if (!input) return;
+    const target = getSavedTargetRepo() || DEFAULT_REPO;
+    const slug = repoSlug(target.owner, target.repo);
+    if (document.activeElement !== input) input.value = slug;
+    setRepoStatus("info", `Builds dispatch to ${slug}.`);
+}
+
+function saveTargetRepo() {
+    const input = document.getElementById("targetRepoInput");
+    if (!input) return;
+    const parsed = parseRepoSlug(input.value);
+    if (!parsed) {
+        setRepoStatus("error", "Use owner/repo, for example your-name/OpenWrt-Builder.");
+        return;
+    }
+    const slug = repoSlug(parsed.owner, parsed.repo);
+    localStorage.setItem(TARGET_REPO_KEY, slug);
+    input.value = slug;
+    setRepoStatus("ok", `Builds now dispatch to ${slug}. Re-verify the token to confirm access.`);
+    const repoLink = document.getElementById("repoUrl");
+    if (repoLink) repoLink.href = `https://github.com/${slug}/tree/main/files/etc/uci-defaults`;
+    updateTokenUI();
+}
+
+function initRepoField() {
+    const input = document.getElementById("targetRepoInput");
+    if (!input) return;
+    input.addEventListener("change", saveTargetRepo);
+    updateRepoField();
+}
+
 function setupToken() {
     document.getElementById("tokenOverlay").style.display = "flex";
     const input = document.getElementById("tokenInput");
     input.value = "";
     setTokenStatus("info", "");
+    updateRepoField();
     updateTokenUI();
     setTimeout(() => input.focus(), 50);
 }
